@@ -1,0 +1,18 @@
+{
+    "debug": false,
+   
+    "gitHubToken": "",
+    "zenHubToken": "",
+
+    "pipelines": [{
+        "id": "someId",
+        "name": "ZenHub name"
+    }, {
+        "id": "someId2",
+        "name": "ZenHub name2"
+    }],
+
+    "repos": ["my/repo", "my/repo2"],
+
+    "excludeLabels": ["excluded label", "excluded2"]
+}
