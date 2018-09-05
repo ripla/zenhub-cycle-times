@@ -1,5 +1,6 @@
 const axios = require("axios");
 const subWeeks = require('date-fns/sub_weeks');
+const getISOWeek = require('date-fns/get_iso_week');
 const startOfWeek = require('date-fns/start_of_week');
 const endOfWeek = require('date-fns/end_of_week');
 const differenceInSeconds = require('date-fns/difference_in_seconds');
@@ -113,12 +114,25 @@ const searchGitHubIssues = async(query) => {
     return allIssues.items;
 }
 
+const secondsToDuration = (input) => {
+    let seconds = input;
+    const result = {};
+    result.days = Math.floor(seconds / (3600 * 24));
+    seconds -= result.days * 3600 * 24;
+    result.hours = Math.floor(seconds / 3600);
+    seconds  -= result.hours * 3600;
+    result.minutes = Math.floor(seconds / 60);
+    return result;
+}
+
 // calculate column times for issues in given repo
 const transitionsForRepo = async (repo, date) => {
     const repoId = await getGitHubRepoId(repo);
 
+    const startDate = subWeeks(date, 4);
+    
     // search GH for issues closed in specific range, excluding configured labels
-    const startOfSearch = startOfWeek(date, { weekStartsOn: 1 }).toISODateString();
+    const startOfSearch = startOfWeek(startDate, { weekStartsOn: 1 }).toISODateString();
     const endOfSearch = endOfWeek(date, { weekStartsOn: 1 }).toISODateString();
     
     const ghQuery = `repo:${repo} closed:${startOfSearch}..${endOfSearch} ${excludeLabelSearchString}`;
@@ -129,7 +143,8 @@ const transitionsForRepo = async (repo, date) => {
         .map(issue => ({
             title: issue.title,
             number: issue.number,
-            closedAt: issue.closed_at
+            closedAt: issue.closed_at,
+            assignees: issue.assignees.map(assignee => assignee.login)
         }))
 
         // add transfer events from ZenHub
@@ -143,7 +158,7 @@ const transitionsForRepo = async (repo, date) => {
         .map(async issuePromise => {
             const issue = await issuePromise;
 
-            const filteredIssue = { number: issue.number, title: issue.title};
+            const filteredIssue = { number: issue.number, title: issue.title, assignees: issue.assignees};
 
             for (pipeline of config.pipelines) {
                 const start = issue.events.find(event => event.to_pipeline.name.startsWith(pipeline.name));
@@ -155,14 +170,19 @@ const transitionsForRepo = async (repo, date) => {
                     filteredIssue.columnTimes[pipeline.id].seconds = differenceInSeconds(end.created_at, start.created_at);
                     filteredIssue.columnTimes[pipeline.id].words = distanceInWordsStrict(end.created_at, start.created_at);
                 };
-
+                
                 // no end time, assume end is issue closed
-                if(start && !end) {
-                    filteredIssue.columnTimes = filteredIssue.columnTimes || {};
-                    filteredIssue.columnTimes[pipeline.id] = {};
-                    filteredIssue.columnTimes[pipeline.id].seconds = differenceInSeconds(issue.closedAt, start.created_at);
-                    filteredIssue.columnTimes[pipeline.id].words = distanceInWordsStrict(issue.closedAt, start.created_at);
-                }
+                // if(start && !end) {
+                //     filteredIssue.columnTimes = filteredIssue.columnTimes || {};
+                //     filteredIssue.columnTimes[pipeline.id] = {};
+                //     filteredIssue.columnTimes[pipeline.id].seconds = differenceInSeconds(issue.closedAt, start.created_at);
+                //     filteredIssue.columnTimes[pipeline.id].words = distanceInWordsStrict(issue.closedAt, start.created_at);
+                // }
+            }
+
+            const closeTransition = issue.events.find(event => event.to_pipeline.name.startsWith(config.endPipeline));
+            if (closeTransition) {
+                filteredIssue.closedAt = closeTransition.created_at;
             }
 
             return filteredIssue;
@@ -173,14 +193,40 @@ const transitionsForRepo = async (repo, date) => {
 }
 
 // logic
-const printCycleTimes = async (date) => {
+const getCycleTimes = async (date) => {
     const issueDetailsPromises = config.repos.map(repo => transitionsForRepo(repo, date));
 
     // a bit of work to combine async arrays
     const issueDetails = (await Promise.all(issueDetailsPromises))
-                            .reduce((left, right) => left.concat(right), []);
-    
-    const columnTimes = issueDetails.filter(issue => issue.columnTimes);
+                            .reduce((left, right) => left.concat(right), [])
+                            .filter(issue => issue.closedAt != undefined);
+
+    const issuesByWeek = issueDetails
+        .reduce((accumulator, issue) => {
+            const week = getISOWeek(issue.closedAt).toString();
+            if(!accumulator.has(week)) {
+                accumulator.set(week, []);
+            }
+            const weekArray = accumulator.get(week);
+            weekArray.push(issue);
+            return accumulator;
+        }, new Map());
+
+    const issuesByWeekArray = Array.from(issuesByWeek);
+    issuesByWeekArray.sort((left, right) => left[0] > right[0]);
+    return Promise.all(issuesByWeekArray.map(([key, value]) => getCycleTimesForWeek(key, value)));
+};
+
+const getCycleTimesForWeek = async (weekNumber, issues) => {
+    const columnTimes = issues.filter(issue => issue.columnTimes)
+                              .map(issue => {
+                                const columnSumSeconds = Object.keys(issue.columnTimes).reduce((columnSum, column) => (issue.columnTimes[column].seconds + columnSum), 0)
+                                const duration = secondsToDuration(columnSumSeconds);
+                                const sumWords = `${duration.days} days, ${duration.hours} hours and ${duration.minutes} minutes`
+                                return Object.assign(issue, {sum: sumWords});
+                              });
+
+
 
     // sum all column times for one issue, and sum all issue times
     const columnTimeAdder = (sum, issue) => {
@@ -188,17 +234,27 @@ const printCycleTimes = async (date) => {
     };
 
     // average of sums
-    const average = columnTimes.reduce(columnTimeAdder, 0) / issueDetails.length;
+    const average = columnTimes.length != 0 ? columnTimes.reduce(columnTimeAdder, 0) / columnTimes.length : 0;
 
-    if(config.debug) {
-       console.log(JSON.stringify(columnTimes, null, 2));
+    if(config.printIssueDetails) {
+        console.log(`Week number ${weekNumber}`);
+        console.log(JSON.stringify(columnTimes, null, 2));
     }
 
-    const days = Math.round(average / 86400);
-    const hours = Math.round(average % 86400 / 60 / 60);
+    const duration = secondsToDuration(average);
     
-    console.log(`Average cycle time for ${issueDetails.length} issues is ${days} days and ${hours} hours`);
-};
+    // const startOfSearch = startOfWeek(date, { weekStartsOn: 1 }).toISODateString();
+    // const endOfSearch = endOfWeek(date, { weekStartsOn: 1 }).toISODateString();
 
-//default to last week
-printCycleTimes(subWeeks(new Date(), 1).toISOString());
+    return `Average cycle time for ${columnTimes.length} issues in week ${weekNumber} is ${duration.days} days, ${duration.hours} hours and ${duration.minutes} minutes.`;
+}
+
+getCycleTimes(new Date().toISOString()).then(cycleTimes => cycleTimes.forEach(week => console.log(week)));
+
+// Promise.all([4,3,2,1,0].map(x => getCycleTimes(subWeeks(new Date(), x).toISOString())))
+//     .then(cycleTimes => cycleTimes.forEach(week => console.log(week)));
+
+// ;
+// getCycleTimes(subWeeks(new Date(), 2).toISOString());
+// getCycleTimes(subWeeks(new Date(), 3).toISOString());
+// getCycleTimes(subWeeks(new Date(), 4).toISOString());
