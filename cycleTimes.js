@@ -110,7 +110,6 @@ const searchGitHubIssues = async(query) => {
         sort: 'updated'
     });
 
-    
     return allIssues.items;
 }
 
@@ -170,14 +169,6 @@ const transitionsForRepo = async (repo, date) => {
                     filteredIssue.columnTimes[pipeline.id].seconds = differenceInSeconds(end.created_at, start.created_at);
                     filteredIssue.columnTimes[pipeline.id].words = distanceInWordsStrict(end.created_at, start.created_at);
                 };
-                
-                // no end time, assume end is issue closed
-                // if(start && !end) {
-                //     filteredIssue.columnTimes = filteredIssue.columnTimes || {};
-                //     filteredIssue.columnTimes[pipeline.id] = {};
-                //     filteredIssue.columnTimes[pipeline.id].seconds = differenceInSeconds(issue.closedAt, start.created_at);
-                //     filteredIssue.columnTimes[pipeline.id].words = distanceInWordsStrict(issue.closedAt, start.created_at);
-                // }
             }
 
             const closeTransition = issue.events.find(event => event.to_pipeline.name.startsWith(config.endPipeline));
@@ -226,8 +217,6 @@ const getCycleTimesForWeek = async (weekNumber, issues) => {
                                 return Object.assign(issue, {sum: sumWords});
                               });
 
-
-
     // sum all column times for one issue, and sum all issue times
     const columnTimeAdder = (sum, issue) => {
         return sum + Object.keys(issue.columnTimes).reduce((columnSum, column) => (issue.columnTimes[column].seconds + columnSum), 0);
@@ -242,19 +231,8 @@ const getCycleTimesForWeek = async (weekNumber, issues) => {
     }
 
     const duration = secondsToDuration(average);
-    
-    // const startOfSearch = startOfWeek(date, { weekStartsOn: 1 }).toISODateString();
-    // const endOfSearch = endOfWeek(date, { weekStartsOn: 1 }).toISODateString();
 
     return `Average cycle time for ${columnTimes.length} issues in week ${weekNumber} is ${duration.days} days, ${duration.hours} hours and ${duration.minutes} minutes.`;
 }
 
 getCycleTimes(new Date().toISOString()).then(cycleTimes => cycleTimes.forEach(week => console.log(week)));
-
-// Promise.all([4,3,2,1,0].map(x => getCycleTimes(subWeeks(new Date(), x).toISOString())))
-//     .then(cycleTimes => cycleTimes.forEach(week => console.log(week)));
-
-// ;
-// getCycleTimes(subWeeks(new Date(), 2).toISOString());
-// getCycleTimes(subWeeks(new Date(), 3).toISOString());
-// getCycleTimes(subWeeks(new Date(), 4).toISOString());

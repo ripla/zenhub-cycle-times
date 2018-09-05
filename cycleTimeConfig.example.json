@@ -1,6 +1,7 @@
 {
     "debug": false,
-   
+    "printIssueDetails": false,
+
     "gitHubToken": "",
     "zenHubToken": "",
 
@@ -11,6 +12,8 @@
         "id": "someId2",
         "name": "ZenHub name2"
     }],
+
+    "endPipeline": "",
 
     "repos": ["my/repo", "my/repo2"],
 
